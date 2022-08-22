@@ -1,20 +1,22 @@
-﻿using ITfoxtec.Identity.Saml2;
-using ITfoxtec.Identity.Saml2.Schemas;
-using ITfoxtec.Identity.Saml2.MvcCore;
-using System;
-using System.Collections.Generic;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using System.Security.Claims;
-using System.Linq;
-using System.Security.Cryptography.X509Certificates;
-using Microsoft.IdentityModel.Tokens.Saml2;
-using TestIdPCore.Models;
-using ITfoxtec.Identity.Saml2.Schemas.Metadata;
-using System.Net.Http;
-using System.Threading.Tasks;
-using System.Threading;
+﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Security.Claims;
+using System.Threading;
+using System.Threading.Tasks;
+using ITfoxtec.Identity.Saml2;
+using ITfoxtec.Identity.Saml2.MvcCore;
+using ITfoxtec.Identity.Saml2.Schemas;
+using ITfoxtec.Identity.Saml2.Schemas.Metadata;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens.Saml2;
+using Newtonsoft.Json;
+using TestIdPCore.Models;
+using HttpRequest = ITfoxtec.Identity.Saml2.Http.HttpRequest;
 #if DEBUG
 using System.Diagnostics;
 #endif
@@ -25,47 +27,73 @@ namespace TestIdPCore.Controllers
     [Route("Auth")]
     public class AuthController : Controller
     {
-        private readonly Settings settings;
-        private readonly Saml2Configuration config;
-        private readonly IHttpClientFactory httpClientFactory;
-
         // List of Artifacts for test purposes.
-        private static ConcurrentDictionary<string, Saml2AuthnResponse> artifactSaml2AuthnResponseCache = new ConcurrentDictionary<string, Saml2AuthnResponse>();
+        private static readonly ConcurrentDictionary<string, Saml2AuthnResponse> ArtifactSaml2AuthnResponseCache = new();
+        private readonly Saml2Configuration _config;
+        private readonly IHttpClientFactory _httpClientFactory;
+        private readonly Settings _settings;
 
         public AuthController(Settings settings, Saml2Configuration config, IHttpClientFactory httpClientFactory)
         {
-            this.settings = settings;
-            this.config = config;
-            this.httpClientFactory = httpClientFactory;
+            _settings = settings;
+            _config = config;
+            _httpClientFactory = httpClientFactory;
         }
 
         [Route("Login")]
         public async Task<IActionResult> Login()
         {
             var requestBinding = new Saml2RedirectBinding();
-            var relyingParty = await ValidateRelyingParty(ReadRelyingPartyFromLoginRequest(requestBinding));
-
+            var saml2Request = ReadRelyingPartyFromLoginRequest(requestBinding);
             var saml2AuthnRequest = new Saml2AuthnRequest(GetRpSaml2Configuration());
-            try
+            
+            var session = new SamlDownSequenceData
             {
-                requestBinding.Unbind(Request.ToGenericHttpRequest(), saml2AuthnRequest);
+                Id = saml2AuthnRequest.Id.ToString(),
+                RelayState = requestBinding.RelayState,
+                Issuer = saml2Request,
+                SessionId = HttpContext.Session.Id
+            };
 
-                // ****  Handle user login e.g. in GUI ****
-                // Test user with session index and claims
-                var sessionIndex = Guid.NewGuid().ToString();
-                var claims = CreateTestUserClaims(saml2AuthnRequest.Subject?.NameID?.ID);
+            HttpContext.Session.SetString("Saml2DowsSeq", JsonConvert.SerializeObject(session));
 
-                return LoginResponse(saml2AuthnRequest.Id, Saml2StatusCodes.Success, requestBinding.RelayState, relyingParty, sessionIndex, claims);
-            }
-            catch (Exception exc)
-            {
-#if DEBUG
-                Debug.WriteLine($"Saml 2.0 Authn Request error: {exc.ToString()}\nSaml Auth Request: '{saml2AuthnRequest.XmlDocument?.OuterXml}'\nQuery String: {Request.QueryString}");
-#endif
-                return LoginResponse(saml2AuthnRequest.Id, Saml2StatusCodes.Responder, requestBinding.RelayState, relyingParty);
-            }
+            return View(new LoginViewModel());
         }
-        
+
+        [Route("_Login")]
+        public async Task<IActionResult> Login(LoginViewModel model)
+        {
+            var sessionData = JsonConvert.DeserializeObject<SamlDownSequenceData>(HttpContext.Session.GetString("Saml2DowsSeq"));
+            var relyingParty = ValidateRelyingParty(sessionData.Issuer).GetAwaiter().GetResult();
+
+            if (HttpContext.Session.Id == sessionData.SessionId)
+            {
+                var binding = new Saml2PostBinding
+                {
+                    RelayState = sessionData.RelayState
+                };
+                var config = GetRpSaml2Configuration(relyingParty);
+
+                var authResponse = new Saml2AuthnResponse(config)
+                {
+                    InResponseTo = new Saml2Id(sessionData.Id),
+                    Status = Saml2StatusCodes.Success,
+                    Destination = relyingParty.AcsDestination,
+                    SessionIndex = HttpContext.Session.Id
+                };
+
+                var claims = CreateTestUserClaims("ming.yang@advantech.com.tw");
+                var claimsIdentity = new ClaimsIdentity(claims);
+                authResponse.NameId = new Saml2NameIdentifier("ming.yang@advantech.com.tw", NameIdentifierFormats.Persistent);
+                authResponse.ClaimsIdentity = claimsIdentity;
+                authResponse.CreateSecurityToken(relyingParty.Issuer, subjectConfirmationLifetime: 5, issuedTokenLifetime: 60);
+
+                return binding.Bind(authResponse).ToActionResult();
+            }
+
+            return BadRequest();
+        }
+
         [Route("Artifact")]
         public async Task<IActionResult> Artifact()
         {
@@ -73,18 +101,18 @@ namespace TestIdPCore.Controllers
             {
                 var soapEnvelope = new Saml2SoapEnvelope();
 
-                var httpRequest = await Request.ToGenericHttpRequestAsync(readBodyAsString: true);
+                var httpRequest = await Request.ToGenericHttpRequestAsync(true);
                 var relyingParty = await ValidateRelyingParty(ReadRelyingPartyFromSoapEnvelopeRequest(httpRequest, soapEnvelope));
 
                 var saml2ArtifactResolve = new Saml2ArtifactResolve(GetRpSaml2Configuration(relyingParty));
                 soapEnvelope.Unbind(httpRequest, saml2ArtifactResolve);
 
-                if (!artifactSaml2AuthnResponseCache.Remove(saml2ArtifactResolve.Artifact, out Saml2AuthnResponse saml2AuthnResponse))
+                if (!ArtifactSaml2AuthnResponseCache.Remove(saml2ArtifactResolve.Artifact, out var saml2AuthnResponse))
                 {
                     throw new Exception($"Saml2AuthnResponse not found by Artifact '{saml2ArtifactResolve.Artifact}' in the cache.");
                 }
 
-                var saml2ArtifactResponse = new Saml2ArtifactResponse(config, saml2AuthnResponse)
+                var saml2ArtifactResponse = new Saml2ArtifactResponse(_config, saml2AuthnResponse)
                 {
                     InResponseTo = saml2ArtifactResolve.Id
                 };
@@ -94,7 +122,7 @@ namespace TestIdPCore.Controllers
             catch (Exception exc)
             {
 #if DEBUG
-                Debug.WriteLine($"SPSsoDescriptor error: {exc.ToString()}");
+                Debug.WriteLine($"SPSsoDescriptor error: {exc}");
 #endif
                 throw;
             }
@@ -134,7 +162,7 @@ namespace TestIdPCore.Controllers
             return binding.ReadSamlRequest(Request.ToGenericHttpRequest(), new Saml2LogoutRequest(GetRpSaml2Configuration()))?.Issuer;
         }
 
-        private string ReadRelyingPartyFromSoapEnvelopeRequest<T>(ITfoxtec.Identity.Saml2.Http.HttpRequest httpRequest, Saml2Binding<T> binding)
+        private string ReadRelyingPartyFromSoapEnvelopeRequest<T>(HttpRequest httpRequest, Saml2Binding<T> binding)
         {
             return binding.ReadSamlRequest(httpRequest, new Saml2ArtifactResolve(GetRpSaml2Configuration()))?.Issuer;
         }
@@ -145,13 +173,12 @@ namespace TestIdPCore.Controllers
             {
                 return LoginArtifactResponse(inResponseTo, status, relayState, relyingParty, sessionIndex, claims);
             }
-            else
-            {
-                return LoginPostResponse(inResponseTo, status, relayState, relyingParty, sessionIndex, claims);
-            }
+
+            return LoginPostResponse(inResponseTo, status, relayState, relyingParty, sessionIndex, claims);
         }
 
-        private IActionResult LoginPostResponse(Saml2Id inResponseTo, Saml2StatusCodes status, string relayState, RelyingParty relyingParty, string sessionIndex = null, IEnumerable<Claim> claims = null)
+        private IActionResult LoginPostResponse(Saml2Id inResponseTo, Saml2StatusCodes status, string relayState, RelyingParty relyingParty, string sessionIndex = null,
+            IEnumerable<Claim> claims = null)
         {
             var responsebinding = new Saml2PostBinding();
             responsebinding.RelayState = relayState;
@@ -160,14 +187,15 @@ namespace TestIdPCore.Controllers
             {
                 InResponseTo = inResponseTo,
                 Status = status,
-                Destination = relyingParty.AcsDestination,
+                Destination = relyingParty.AcsDestination
             };
             if (status == Saml2StatusCodes.Success && claims != null)
             {
                 saml2AuthnResponse.SessionIndex = sessionIndex;
 
                 var claimsIdentity = new ClaimsIdentity(claims);
-                saml2AuthnResponse.NameId = new Saml2NameIdentifier(claimsIdentity.Claims.Where(c => c.Type == ClaimTypes.NameIdentifier).Select(c => c.Value).Single(), NameIdentifierFormats.Persistent);
+                saml2AuthnResponse.NameId =
+                    new Saml2NameIdentifier(claimsIdentity.Claims.Where(c => c.Type == ClaimTypes.NameIdentifier).Select(c => c.Value).Single(), NameIdentifierFormats.Persistent);
                 //saml2AuthnResponse.NameId = new Saml2NameIdentifier(claimsIdentity.Claims.Where(c => c.Type == ClaimTypes.NameIdentifier).Select(c => c.Value).Single());
                 saml2AuthnResponse.ClaimsIdentity = claimsIdentity;
 
@@ -177,7 +205,8 @@ namespace TestIdPCore.Controllers
             return responsebinding.Bind(saml2AuthnResponse).ToActionResult();
         }
 
-        private IActionResult LoginArtifactResponse(Saml2Id inResponseTo, Saml2StatusCodes status, string relayState, RelyingParty relyingParty, string sessionIndex = null, IEnumerable<Claim> claims = null)
+        private IActionResult LoginArtifactResponse(Saml2Id inResponseTo, Saml2StatusCodes status, string relayState, RelyingParty relyingParty, string sessionIndex = null,
+            IEnumerable<Claim> claims = null)
         {
             var responsebinding = new Saml2ArtifactBinding();
             responsebinding.RelayState = relayState;
@@ -198,13 +227,15 @@ namespace TestIdPCore.Controllers
                 saml2AuthnResponse.SessionIndex = sessionIndex;
 
                 var claimsIdentity = new ClaimsIdentity(claims);
-                saml2AuthnResponse.NameId = new Saml2NameIdentifier(claimsIdentity.Claims.Where(c => c.Type == ClaimTypes.NameIdentifier).Select(c => c.Value).Single(), NameIdentifierFormats.Persistent);
+                saml2AuthnResponse.NameId =
+                    new Saml2NameIdentifier(claimsIdentity.Claims.Where(c => c.Type == ClaimTypes.NameIdentifier).Select(c => c.Value).Single(), NameIdentifierFormats.Persistent);
                 //saml2AuthnResponse.NameId = new Saml2NameIdentifier(claimsIdentity.Claims.Where(c => c.Type == ClaimTypes.NameIdentifier).Select(c => c.Value).Single());
                 saml2AuthnResponse.ClaimsIdentity = claimsIdentity;
 
                 var token = saml2AuthnResponse.CreateSecurityToken(relyingParty.Issuer, subjectConfirmationLifetime: 5, issuedTokenLifetime: 60);
             }
-            artifactSaml2AuthnResponseCache[saml2ArtifactResolve.Artifact] = saml2AuthnResponse;
+
+            ArtifactSaml2AuthnResponseCache[saml2ArtifactResolve.Artifact] = saml2AuthnResponse;
 
             return responsebinding.ToActionResult();
         }
@@ -227,21 +258,21 @@ namespace TestIdPCore.Controllers
 
         private Saml2Configuration GetRpSaml2Configuration(RelyingParty relyingParty = null)
         {
-            var rpConfig = new Saml2Configuration()
+            var rpConfig = new Saml2Configuration
             {
-                Issuer = config.Issuer,
-                SingleSignOnDestination = config.SingleSignOnDestination,
-                SingleLogoutDestination = config.SingleLogoutDestination,
-                ArtifactResolutionService = config.ArtifactResolutionService,
-                SigningCertificate = config.SigningCertificate,
-                SignatureAlgorithm = config.SignatureAlgorithm,
-                CertificateValidationMode = config.CertificateValidationMode,
-                RevocationMode = config.RevocationMode
+                Issuer = _config.Issuer,
+                SingleSignOnDestination = _config.SingleSignOnDestination,
+                SingleLogoutDestination = _config.SingleLogoutDestination,
+                ArtifactResolutionService = _config.ArtifactResolutionService,
+                SigningCertificate = _config.SigningCertificate,
+                SignatureAlgorithm = _config.SignatureAlgorithm,
+                CertificateValidationMode = _config.CertificateValidationMode,
+                RevocationMode = _config.RevocationMode
             };
 
-            rpConfig.AllowedAudienceUris.AddRange(config.AllowedAudienceUris);
+            rpConfig.AllowedAudienceUris.AddRange(_config.AllowedAudienceUris);
 
-            if (relyingParty != null) 
+            if (relyingParty != null)
             {
                 rpConfig.SignatureValidationCertificates.Add(relyingParty.SignatureValidationCertificate);
                 rpConfig.EncryptionCertificate = relyingParty.EncryptionCertificate;
@@ -252,10 +283,10 @@ namespace TestIdPCore.Controllers
 
         private async Task<RelyingParty> ValidateRelyingParty(string issuer)
         {
-            using var cancellationTokenSource = new CancellationTokenSource(3 * 1000); // Cancel after 3 seconds.
-            await Task.WhenAll(settings.RelyingParties.Select(rp => LoadRelyingPartyAsync(rp, cancellationTokenSource)));
+            using var cancellationTokenSource = new CancellationTokenSource(30 * 1000); // Cancel after 3 seconds.
+            await Task.WhenAll(_settings.RelyingParties.Select(rp => LoadRelyingPartyAsync(rp, cancellationTokenSource)));
 
-            return settings.RelyingParties.Where(rp => rp.Issuer != null && rp.Issuer.Equals(issuer, StringComparison.InvariantCultureIgnoreCase)).Single();
+            return _settings.RelyingParties.Single(rp => rp.Issuer != null && rp.Issuer.Equals(issuer, StringComparison.InvariantCultureIgnoreCase));
         }
 
         private async Task LoadRelyingPartyAsync(RelyingParty rp, CancellationTokenSource cancellationTokenSource)
@@ -266,7 +297,7 @@ namespace TestIdPCore.Controllers
                 if (string.IsNullOrEmpty(rp.Issuer))
                 {
                     var entityDescriptor = new EntityDescriptor();
-                    await entityDescriptor.ReadSPSsoDescriptorFromUrlAsync(httpClientFactory, new Uri(rp.Metadata), cancellationTokenSource.Token);
+                    await entityDescriptor.ReadSPSsoDescriptorFromUrlAsync(_httpClientFactory, new Uri(rp.Metadata), cancellationTokenSource.Token);
                     if (entityDescriptor.SPSsoDescriptor != null)
                     {
                         rp.Issuer = entityDescriptor.EntityId;
@@ -285,7 +316,7 @@ namespace TestIdPCore.Controllers
             {
                 //log error
 #if DEBUG
-                Debug.WriteLine($"SPSsoDescriptor error: {exc.ToString()}");
+                Debug.WriteLine($"SPSsoDescriptor error: {exc}");
 #endif
             }
         }
@@ -298,4 +329,4 @@ namespace TestIdPCore.Controllers
             yield return new Claim(ClaimTypes.Email, $"{userId}@someemail.test");
         }
     }
-}        
+}

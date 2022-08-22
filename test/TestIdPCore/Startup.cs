@@ -41,6 +41,10 @@ namespace TestIdPCore
                 return saml2Configuration;
             });
 
+            services.AddSession(options => {
+                options.IdleTimeout = TimeSpan.FromMinutes(60);
+            });
+
             services.AddSaml2();
             services.AddHttpClient();
 
@@ -61,7 +65,7 @@ namespace TestIdPCore
 
             app.UseHttpsRedirection();
             app.UseStaticFiles();
-
+            app.UseSession();
             app.UseRouting();
 
             app.UseSaml2();

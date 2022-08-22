@@ -1,4 +1,9 @@
-﻿using System;
+﻿#if NETFULL
+using System.IdentityModel.Tokens;
+#else
+using Microsoft.IdentityModel.Tokens.Saml2;
+#endif
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -9,91 +14,19 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
-#if NETFULL
-using System.IdentityModel.Tokens;
-#else
-using Microsoft.IdentityModel.Tokens.Saml2;
-#endif
 
 namespace ITfoxtec.Identity.Saml2.Schemas.Metadata
 {
     /// <summary>
-    /// The EntitiesDescriptor element contains the metadata for an optionally named group of SAML entities.
+    ///     The EntitiesDescriptor element contains the metadata for an optionally named group of SAML entities.
     /// </summary>
     public class EntityDescriptor
     {
-        const string elementName = Saml2MetadataConstants.Message.EntityDescriptor;
-
-        public Saml2Configuration Config { get; protected set; }
-
-        /// <summary>
-        /// Specifies the unique identifier of the SAML entity whose metadata is described by the element's contents.
-        /// </summary>
-        public string EntityId { get; protected set; }
-
-        /// <summary>
-        /// A document-unique identifier for the element, typically used as a reference point when signing.
-        /// </summary>
-        public Saml2Id Id { get; protected set; }
-
-        /// <summary>
-        /// The ID as string.
-        /// </summary>
-        /// <value>The ID string.</value>
-        public string IdAsString
-        {
-            get { return Id.Value; }
-        }
-
-        /// <summary>
-        /// [Optional]
-        /// An metadata XML signature that authenticates the containing element and its contents.
-        /// </summary>
-        public X509Certificate2 MetadataSigningCertificate { get; protected set; }
-
-        /// <summary>
-        /// [Optional]
-        /// Default EndCertOnly (Only the end certificate is included in the X.509 chain information).
-        /// </summary>
-        public X509IncludeOption CertificateIncludeOption { get; set; }
-
-        /// <summary>
-        /// [Optional]
-        /// Optional attribute indicates the expiration time of the metadata contained in the element and any contained elements.
-        /// 
-        /// Metadata is valid until in days from now.
-        /// </summary>
-        public int? ValidUntil { get; set; }
-
-        /// <summary>
-        /// [Optional]
-        /// The SPSSODescriptor element extends SSODescriptorType with content reflecting profiles specific
-        /// to service providers. 
-        /// </summary>
-        public SPSsoDescriptor SPSsoDescriptor  { get; set; }
-
-        /// <summary>
-        /// [Optional]
-        /// The IDPSSODescriptor element extends SSODescriptorType with content reflecting profiles specific 
-        /// to identity providers supporting SSO.
-        /// </summary>
-        public IdPSsoDescriptor IdPSsoDescriptor { get; set; }
-
-        /// <summary>
-        /// [Optional]
-        /// Optional element identifying various kinds of contact personnel.
-        /// </summary>
-        [Obsolete("The ContactPerson method is deprecated. Please use ContactPersons which is a list of contact persons.")]
-        public ContactPerson ContactPerson { get; set; }
-
-        /// <summary>
-        /// [Optional]
-        /// Optional element identifying various kinds of contact personnel.
-        /// </summary>
-        public IEnumerable<ContactPerson> ContactPersons { get; set; }
+        private const string elementName = Saml2MetadataConstants.Message.EntityDescriptor;
 
         public EntityDescriptor()
-        { }
+        {
+        }
 
         public EntityDescriptor(Saml2Configuration config, bool signMetadata = true) : this()
         {
@@ -109,16 +42,82 @@ namespace ITfoxtec.Identity.Saml2.Schemas.Metadata
             }
         }
 
+        public Saml2Configuration Config { get; protected set; }
+
+        /// <summary>
+        ///     Specifies the unique identifier of the SAML entity whose metadata is described by the element's contents.
+        /// </summary>
+        public string EntityId { get; protected set; }
+
+        /// <summary>
+        ///     A document-unique identifier for the element, typically used as a reference point when signing.
+        /// </summary>
+        public Saml2Id Id { get; protected set; }
+
+        /// <summary>
+        ///     The ID as string.
+        /// </summary>
+        /// <value>The ID string.</value>
+        public string IdAsString => Id.Value;
+
+        /// <summary>
+        ///     [Optional]
+        ///     An metadata XML signature that authenticates the containing element and its contents.
+        /// </summary>
+        public X509Certificate2 MetadataSigningCertificate { get; protected set; }
+
+        /// <summary>
+        ///     [Optional]
+        ///     Default EndCertOnly (Only the end certificate is included in the X.509 chain information).
+        /// </summary>
+        public X509IncludeOption CertificateIncludeOption { get; set; }
+
+        /// <summary>
+        ///     [Optional]
+        ///     Optional attribute indicates the expiration time of the metadata contained in the element and any contained
+        ///     elements.
+        ///     Metadata is valid until in days from now.
+        /// </summary>
+        public int? ValidUntil { get; set; }
+
+        /// <summary>
+        ///     [Optional]
+        ///     The SPSSODescriptor element extends SSODescriptorType with content reflecting profiles specific
+        ///     to service providers.
+        /// </summary>
+        public SPSsoDescriptor SPSsoDescriptor { get; set; }
+
+        /// <summary>
+        ///     [Optional]
+        ///     The IDPSSODescriptor element extends SSODescriptorType with content reflecting profiles specific
+        ///     to identity providers supporting SSO.
+        /// </summary>
+        public IdPSsoDescriptor IdPSsoDescriptor { get; set; }
+
+        /// <summary>
+        ///     [Optional]
+        ///     Optional element identifying various kinds of contact personnel.
+        /// </summary>
+        [Obsolete("The ContactPerson method is deprecated. Please use ContactPersons which is a list of contact persons.")]
+        public ContactPerson ContactPerson { get; set; }
+
+        /// <summary>
+        ///     [Optional]
+        ///     Optional element identifying various kinds of contact personnel.
+        /// </summary>
+        public IEnumerable<ContactPerson> ContactPersons { get; set; }
+
         public XmlDocument ToXmlDocument()
         {
             var envelope = new XElement(Saml2MetadataConstants.MetadataNamespaceX + elementName);
 
             envelope.Add(GetXContent());
             var xmlDocument = envelope.ToXmlDocument();
-            if(MetadataSigningCertificate != null)
+            if (MetadataSigningCertificate != null)
             {
                 xmlDocument.SignDocument(MetadataSigningCertificate, Config.SignatureAlgorithm, Config.XmlCanonicalizationMethod, CertificateIncludeOption, IdAsString);
             }
+
             return xmlDocument;
         }
 
@@ -128,12 +127,15 @@ namespace ITfoxtec.Identity.Saml2.Schemas.Metadata
             {
                 throw new ArgumentNullException("EntityId property");
             }
+
             yield return new XAttribute(Saml2MetadataConstants.Message.EntityId, EntityId);
             yield return new XAttribute(Saml2MetadataConstants.Message.Id, IdAsString);
             if (ValidUntil.HasValue)
             {
-                yield return new XAttribute(Saml2MetadataConstants.Message.ValidUntil, DateTimeOffset.UtcNow.AddDays(ValidUntil.Value).UtcDateTime.ToString(Saml2Constants.DateTimeFormat, CultureInfo.InvariantCulture));
+                yield return new XAttribute(Saml2MetadataConstants.Message.ValidUntil,
+                                            DateTimeOffset.UtcNow.AddDays(ValidUntil.Value).UtcDateTime.ToString(Saml2Constants.DateTimeFormat, CultureInfo.InvariantCulture));
             }
+
             yield return new XAttribute(Saml2MetadataConstants.MetadataNamespaceNameX, Saml2MetadataConstants.MetadataNamespace);
 
             if (SPSsoDescriptor != null)
@@ -229,7 +231,7 @@ namespace ITfoxtec.Identity.Saml2.Schemas.Metadata
             }
         }
 
-        public async virtual Task<EntityDescriptor> ReadIdPSsoDescriptorFromUrlAsync(
+        public virtual async Task<EntityDescriptor> ReadIdPSsoDescriptorFromUrlAsync(
 #if NET || NETCORE
             IHttpClientFactory httpClientFactory,
 #else
@@ -241,14 +243,18 @@ namespace ITfoxtec.Identity.Saml2.Schemas.Metadata
             var httpClient = httpClientFactory.CreateClient();
 #endif
 
-            using (var response = cancellationToken.HasValue ? await httpClient.GetAsync(idPMetadataUrl, cancellationToken.Value) : await httpClient.GetAsync(idPMetadataUrl))
+            using (var response = cancellationToken.HasValue
+                       ? await httpClient.GetAsync(idPMetadataUrl, cancellationToken.Value)
+                       : await httpClient.GetAsync(idPMetadataUrl))
             {
                 // Handle the response
                 switch (response.StatusCode)
                 {
                     case HttpStatusCode.OK:
 #if NET
-                        return ReadIdPSsoDescriptor(cancellationToken.HasValue ? await response.Content.ReadAsStringAsync(cancellationToken.Value) : await response.Content.ReadAsStringAsync());
+                        return ReadIdPSsoDescriptor(cancellationToken.HasValue
+                                                        ? await response.Content.ReadAsStringAsync(cancellationToken.Value)
+                                                        : await response.Content.ReadAsStringAsync());
 #else
                         return ReadIdPSsoDescriptor(await response.Content.ReadAsStringAsync());
 #endif
@@ -273,7 +279,7 @@ namespace ITfoxtec.Identity.Saml2.Schemas.Metadata
             }
         }
 
-        public async virtual Task<EntityDescriptor> ReadSPSsoDescriptorFromUrlAsync(
+        public virtual async Task<EntityDescriptor> ReadSPSsoDescriptorFromUrlAsync(
 #if NET || NETCORE
             IHttpClientFactory httpClientFactory,
 #else
@@ -285,14 +291,18 @@ namespace ITfoxtec.Identity.Saml2.Schemas.Metadata
             var httpClient = httpClientFactory.CreateClient();
 #endif
 
-            using (var response = cancellationToken.HasValue ? await httpClient.GetAsync(spMetadataUrl, cancellationToken.Value) : await httpClient.GetAsync(spMetadataUrl))
+            using (var response = cancellationToken.HasValue
+                       ? await httpClient.GetAsync(spMetadataUrl, cancellationToken.Value)
+                       : await httpClient.GetAsync(spMetadataUrl))
             {
                 // Handle the response
                 switch (response.StatusCode)
                 {
                     case HttpStatusCode.OK:
 #if NET
-                        return ReadSPSsoDescriptor(cancellationToken.HasValue ? await response.Content.ReadAsStringAsync(cancellationToken.Value) : await response.Content.ReadAsStringAsync());
+                        return ReadSPSsoDescriptor(cancellationToken.HasValue
+                                                       ? await response.Content.ReadAsStringAsync(cancellationToken.Value)
+                                                       : await response.Content.ReadAsStringAsync());
 #else
                         return ReadSPSsoDescriptor(await response.Content.ReadAsStringAsync());
 #endif
