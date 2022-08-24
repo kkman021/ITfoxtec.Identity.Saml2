@@ -23,8 +23,6 @@
                 <input type="password" asp-for="Password" class="form-control" />
                 <span asp-validation-for="Password" class="text-danger"></span>
             </div>
-            <input type="hidden" asp-for="SAMLRequest" class="form-control" value="@Model.SAMLRequest" />
-            <input type="hidden" asp-for="RelayState" class="form-control" value="@Model.RelayState" />
             <div class="form-group">
                 <input type="submit" value="Save" class="btn btn-primary" />
             </div>

@@ -28,7 +28,10 @@ namespace TestWebAppCore.Controllers
         public IActionResult Login(string returnUrl = null)
         {
             var binding = new Saml2RedirectBinding();
-            binding.SetRelayStateQuery(new Dictionary<string, string> { { relayStateReturnUrl, returnUrl ?? Url.Content("~/") } });
+            binding.SetRelayStateQuery(new Dictionary<string, string>
+            {
+                { relayStateReturnUrl, returnUrl ?? Url.Content("~/") }
+            });
 
             return binding.Bind(new Saml2AuthnRequest(config)
             {

@@ -45,8 +45,11 @@ namespace TestIdPCore.Controllers
         {
             var requestBinding = new Saml2RedirectBinding();
             var saml2Request = ReadRelyingPartyFromLoginRequest(requestBinding);
-            var saml2AuthnRequest = new Saml2AuthnRequest(GetRpSaml2Configuration());
-            
+            var relyingParty = ValidateRelyingParty(saml2Request).GetAwaiter().GetResult();
+
+            var saml2AuthnRequest = new Saml2AuthnRequest(GetRpSaml2Configuration(relyingParty));
+            requestBinding.Unbind(Request.ToGenericHttpRequest(), saml2AuthnRequest);
+
             var session = new SamlDownSequenceData
             {
                 Id = saml2AuthnRequest.Id.ToString(),
@@ -267,7 +270,8 @@ namespace TestIdPCore.Controllers
                 SigningCertificate = _config.SigningCertificate,
                 SignatureAlgorithm = _config.SignatureAlgorithm,
                 CertificateValidationMode = _config.CertificateValidationMode,
-                RevocationMode = _config.RevocationMode
+                RevocationMode = _config.RevocationMode,
+                SignAuthnRequest = _config.SignAuthnRequest
             };
 
             rpConfig.AllowedAudienceUris.AddRange(_config.AllowedAudienceUris);
